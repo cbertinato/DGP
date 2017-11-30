@@ -12,6 +12,7 @@ Welcome to Dynamic Gravity Processor's documentation!
 
    modules
    dgp.lib
+   dgp.gui
    contributing
 
 

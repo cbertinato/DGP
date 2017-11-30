@@ -3,11 +3,6 @@
 """
 Provide definitions of the models used by the Qt Application in our
 model/view widgets.
-Defines:
-TableModel
-ProjectModel
-SelectionDelegate
-ChannelListModel
 """
 
 import logging
@@ -39,14 +34,18 @@ class TableModel(QtCore.QAbstractTableModel):
         self._updates = {}
 
     def set_object(self, obj):
-        """Populates the model with key, value pairs from the passed objects'
-        __dict__"""
+        """
+        Populates the model with key, value pairs from the passed objects'
+        __dict__
+        """
         for key, value in obj.__dict__.items():
             self.append(key, value)
 
     def append(self, *args):
-        """Add a new row of data to the table, trimming input array to length of
-         columns."""
+        """
+        Add a new row of data to the table, trimming input array to length of
+        columns.
+        """
         if not isinstance(args, list):
             args = list(args)
         while len(args) < len(self._cols):
@@ -104,9 +103,11 @@ class TableModel(QtCore.QAbstractTableModel):
     # Required implementations of super class for editable table
 
     def setData(self, index: QtCore.QModelIndex, value: QtCore.QVariant, role=None):
-        """Basic implementation of editable model. This doesn't propagate the
+        """
+        Basic implementation of editable model. This doesn't propagate the
         changes to the underlying object upon which the model was based
-        though (yet)"""
+        though (yet)
+        """
         if index.isValid() and role == QtCore.Qt.ItemIsEditable:
             self._rows[index.row()][index.column()] = value
             self.dataChanged.emit(index, index)
@@ -127,6 +128,14 @@ class BaseTreeModel(QAbstractItemModel):
 
     @property
     def root(self):
+        """
+        @property
+
+        Returns
+        -------
+        AbstractTreeItem:
+            Top-level or root item in the model.
+        """
         return self._root
 
     def parent(self, index: QModelIndex=QModelIndex()) -> QModelIndex:
@@ -145,9 +154,31 @@ class BaseTreeModel(QAbstractItemModel):
         return self.createIndex(parent_item.row(), 0, parent_item)
 
     def update(self, *args, **kwargs):
+        """
+
+        Parameters
+        ----------
+        args
+        kwargs
+
+        Returns
+        -------
+
+        """
         raise NotImplementedError("Update must be implemented by subclass.")
 
     def data(self, index: QModelIndex, role: QtDataRoles=None):
+        """
+
+        Parameters
+        ----------
+        index
+        role
+
+        Returns
+        -------
+
+        """
         raise NotImplementedError("data() must be implemented by subclass.")
 
     def flags(self, index: QModelIndex) -> QtItemFlags:
@@ -163,12 +194,23 @@ class BaseTreeModel(QAbstractItemModel):
 
     @staticmethod
     def columnCount(parent: QModelIndex=QModelIndex(), *args, **kwargs):
+        """Basic static implementation - returns 1"""
         return 1
 
     def headerData(self, section: int, orientation, role:
                    QtDataRoles=QtDataRoles.DisplayRole):
-        """The Root item is responsible for first row header data"""
-        if orientation == QtCore.Qt.Horizontal and role == QtDataRoles.DisplayRole:
+        """
+        Returns display data for the Model header.
+        If root has data of DisplayRole, it is returned here, otherwise an 
+        empty QVariant() is returned.
+
+        Returns
+        -------
+        QVariant:
+            Data to display for header
+        """
+        if (orientation == QtCore.Qt.Horizontal and
+                role == QtDataRoles.DisplayRole):
             return self._root.data(role)
         return QVariant()
 
@@ -190,7 +232,19 @@ class BaseTreeModel(QAbstractItemModel):
         else:
             return QModelIndex()
 
-    def rowCount(self, parent: QModelIndex=QModelIndex(), *args, **kwargs):
+    def rowCount(self, parent: QModelIndex=QModelIndex(), *a, **kw) -> int:
+        """
+
+        Parameters
+        ----------
+        parent: QModelIndex
+            Parent index to query row count
+
+        Returns
+        -------
+        int:
+            Count of children belonging to item at parent QModelIndex
+        """
         # *args and **kwargs are necessary to suppress Qt Warnings
         if parent.isValid():
             return parent.internalPointer().child_count()
@@ -229,16 +283,17 @@ class ProjectModel(BaseTreeModel):
         We do some processing here to encapsulate data within Qt Types where
         necesarry, as TreeItems in general do not import Qt Modules due to
         the possibilty of pickling them.
+
         Parameters
         ----------
         index: QModelIndex
             Model Index of item to retrieve data from
         role: QtDataRoles
             Role from the enumerated Qt roles in dgp/gui/qtenum.py
-            (Re-implemented for convenience and portability from PyQt defs)
+
         Returns
         -------
-        QVariant
+        QVariant:
             Returns QVariant data depending on specified role.
             If role is UserRole, the underlying AbstractTreeItem object is
             returned
@@ -319,34 +374,43 @@ class SelectionDelegate(Qt.QStyledItemDelegate):
 
 class ChannelListModel(BaseTreeModel):
     """
-    Tree type model for displaying/plotting data channels.
-    This model supports drag and drop internally.
+    Creates a model with n+1 top-level headers where n = plots.
+
+    Each plot has a header that channels can then be dragged to from the
+    available channel list.
+    The available channels list (displayed below the plot headers is
+    constructed from the list of channels supplied.
+    The plot headers limit the number of items that can be children to 2,
+    this is so that the MatplotLib plotting canvas can display a left and
+    right Y axis scale for each plot.
+
+    Parameters
+    ----------
+    channels : List[DataChannel]
+        List of DataChannels to add to the model upon instantiation
+    plots: int
+        Number of plot headings to generate
+    parent:
+        Optional Qt GUI Parent
     """
 
     plotOverflow = pyqtSignal(str)  # type: pyqtBoundSignal
-    # signal(int: new index, int: old index, DataChannel)
-    # return -1 if item removed from plots to available list
+    """
+    SIGNAL pyqtSignal(str):
+    
+    Emits UID of item, when dropping item would exceed child limit on a 
+    plot header.
+    """
     channelChanged = pyqtSignal(int, int, DataChannel)  # type: pyqtBoundSignal
+    """
+    SIGNAL pyqtSignal(int, int, DataChannel)
+    
+    Emits (new_index: int, old_index: int, channel: DataChannel) upon 
+    sucessful drag-drop action of a data channel.
+    """
 
     def __init__(self, channels: List[DataChannel], plots: int, parent=None):
-        """
-        Init sets up a model with n+1 top-level headers where n = plots.
-        Each plot has a header that channels can then be dragged to from the
-        available channel list.
-        The available channels list (displayed below the plot headers is
-        constructed from the list of channels supplied.
-        The plot headers limit the number of items that can be children to 2,
-        this is so that the MatplotLib plotting canvas can display a left and
-        right Y axis scale for each plot.
-
-        Parameters
-        ----------
-        channels : List[DataChannel]
-        plots
-        parent
-        """
         super().__init__(TreeLabelItem('Channel Selection'), parent=parent)
-        # It might be worthwhile to create a dedicated plot TreeItem for comp
         self._plots = {}
         self._child_limit = 2
         for i in range(plots):
@@ -355,9 +419,6 @@ class ChannelListModel(BaseTreeModel):
             self.root.append_child(plt_label)
         self._available = TreeLabelItem('Available Channels')
         self._channels = {}
-        # for channel in channels:
-        #     self._available.append_child(channel)
-        #     self._channels[channel.uid] = channel
         self._build_model(channels)
         self.root.append_child(self._available)
 
@@ -370,11 +431,34 @@ class ChannelListModel(BaseTreeModel):
             else:
                 self._available.append_child(channel)
 
-    def append_channel(self, channel: DataChannel):
+    def append_channel(self, channel: DataChannel) -> None:
+        """
+        Append a DataChannel to the model
+
+        New channels are placed under the 'Available Channels' header.
+
+        Parameters
+        ----------
+        channel: DataChannel
+            Channel to add
+        """
         self._available.append_child(channel)
         self._channels[channel.uid] = channel
 
     def remove_channel(self, uid: str) -> bool:
+        """
+        Remove a DataChannel from the model by UID
+
+        Parameters
+        ----------
+        uid: str
+            DataChannel UID to locate and remove
+
+        Returns
+        -------
+        bool:
+            True on sucess, False if uid not located in model
+        """
         if uid not in self._channels:
             return False
         cn = self._channels[uid]  # type: DataChannel
@@ -383,15 +467,15 @@ class ChannelListModel(BaseTreeModel):
         del self._channels[uid]
         return True
 
-    def move_channel(self, uid, index) -> bool:
-        """Move channel specified by uid to parent at index"""
-
     def update(self) -> None:
-        """Update the model layout."""
+        """
+        Request an update of the model view by emitting layoutAboutToBeChanged
+        and layoutChanged signals.
+        """
         self.layoutAboutToBeChanged.emit()
         self.layoutChanged.emit()
 
-    def data(self, index: QModelIndex, role: QtDataRoles=None):
+    def data(self, index: QModelIndex, role: QtDataRoles=None) -> QVariant:
         item_data = index.internalPointer().data(role)
         if item_data is None:
             return QVariant()
@@ -416,12 +500,31 @@ class ChannelListModel(BaseTreeModel):
     def dropMimeData(self, data: QMimeData, action, row, col,
                      parent: QModelIndex) -> bool:
         """
-        Called when data is dropped into the model.
-        This model accepts only Move actions, and expects the data to be
-        textual, containing the UID of the DataChannel that is being dropped.
-        This method will also check to see that a drop will not violate the
-        _child_limit, as we want to limit the number of children to 2 for any
-        plot, allowing us to display twin y-axis scales.
+        Respond to MimeData being dropped on the model/view.
+        Check is performed here to see if dropping a channel would exceed the
+        child limit of a plot parent, as we want to enable the plotting of
+        only 2 channels per plot in order to enable the use of a twin-y axis
+        scale.
+
+        Parameters
+        ----------
+        data: QMimeData
+            QMimeData of the dropped object. Must contain Text referencing a
+            channel UID.
+        action: Qt::DropAction
+            Drag and drop action. Must be MoveAction in this model.
+        row: int
+            Row index relative to new parent where drop occured
+        col: int
+            Column is ignored, assumed to be 1
+        parent: QModelIndex
+            New parent index of dropped object
+
+        Returns
+        -------
+        bool:
+            True on sucess
+            False on failure/invalid drop
         """
         if action != QtCore.Qt.MoveAction:
             return False
@@ -478,11 +581,24 @@ class ChannelListModel(BaseTreeModel):
         return False
 
     def mimeData(self, indexes):
-        """Get the mime encoded data for selected index."""
+        """
+        Encodes a QMimeData reference of the object at index[0] of the
+        specified indexes using the objects UID.
+
+        Parameters
+        ----------
+        indexes: List[QModelIndex]
+            List of QModelIndexes - should always be of length 1 as this is a
+            single selection model/view.
+
+        Returns
+        -------
+        QMimeData:
+            Mime object containing the UID of the item at indexes[0] as a
+            mime/text field.
+        """
         index = indexes[0]
         item_uid = index.internalPointer().uid
-        print("UID for picked item: ", item_uid)
-        print("Picked item label: ", index.internalPointer().label)
         data = QMimeData()
         data.setText(item_uid)
         return data
