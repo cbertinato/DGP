@@ -27,3 +27,13 @@ dgp\.lib\.trajectory\_ingestor module
     :members:
     :undoc-members:
     :show-inheritance:
+
+dgp\.lib\.types module
+----------------------
+
+.. automodule:: dgp.lib.types
+    :members:
+    :inherited-members:
+    :undoc-members:
+    :show-inheritance:
+

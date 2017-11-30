@@ -1,8 +1,10 @@
 *.idea
-*.pyc
 *.pyo
 __pycache__/
 scratch/
 *.pdf
+*.vsdx
 venv/
 *.coverage
+docs/build/
+examples/local_*

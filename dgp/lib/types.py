@@ -35,8 +35,10 @@ class AbstractTreeItem(metaclass=ABCMeta):
     """
     AbstractTreeItem provides the interface definition for an object that can
     be utilized within a heirarchial or tree model.
+
     This AbstractBaseClass (ABC) defines the function signatures required by
     a Tree Model implementation in QT/PyQT.
+
     AbstractTreeItem is also utilized to enforce some level of type safety by
     providing model consumers a simple way to perform type checking on
     instances inherited from this class.
@@ -105,7 +107,7 @@ class AbstractTreeItem(metaclass=ABCMeta):
 
 class BaseTreeItem(AbstractTreeItem):
     """
-    Define a lightweight bare-minimum implementation of the
+    Define a lightweight minimum implementation of the
     AbstractTreeItem to ease futher specialization in subclasses.
     """
     def __init__(self, uid, parent: AbstractTreeItem=None):
@@ -118,7 +120,7 @@ class BaseTreeItem(AbstractTreeItem):
 
     @property
     def uid(self) -> str:
-        """Returns the unique identifier of this object."""
+        """Return the unique identifier (UID) of this object."""
         return self._uid
 
     @property
@@ -143,20 +145,46 @@ class BaseTreeItem(AbstractTreeItem):
             yield child
 
     def data(self, role: QtDataRoles):
+        """
+        Return data based on supplied QtDataRole.
+
+        This method must be overriden in subclasses.
+
+        If a role is not implemented, the method should return None so that
+        the model knows to construct an empty QVariant() object to pass to
+        the view.
+        """
         raise NotImplementedError("data(role) must be implemented in subclass.")
 
     def child(self, index: Union[int, str]):
+        """
+        Return a child of this object by either index position (int), or UID.
+
+        Parameters
+        ----------
+        index: Union[int, str]
+            If int: return child by list index position
+            If str: return child by UID dictionary lookup
+
+        Returns
+        -------
+        AbstractTreeItem:
+            Child referenced by index belonging to this object
+        """
         if isinstance(index, str):
             return self._child_map[index]
         return self._children[index]
 
     def append_child(self, child: AbstractTreeItem) -> None:
         """
-        Appends a child AbstractTreeItem to this object. An object that is
-        not an instance of AbstractTreeItem will be rejected and an Assertion
-        Error will be raised.
-        Likewise if a child already exists within this object, it will
-        silently continue without duplicating the child.
+        Appends a child AbstractTreeItem to this object.
+
+        An object that is not an instance of AbstractTreeItem will be
+        rejected and an AssertionError will be raised.
+
+        If a child already exists within this object, it will silently
+        continue without duplicating the child.
+
         Parameters
         ----------
         child: AbstractTreeItem
@@ -177,7 +205,21 @@ class BaseTreeItem(AbstractTreeItem):
         self._child_map[child.uid] = child
         self.update()
 
-    def remove_child(self, child: Union[AbstractTreeItem, str]):
+    def remove_child(self, child: Union[AbstractTreeItem, str]) -> None:
+        """
+        Remove a child of this object by reference, or by UID
+
+        Parameters
+        ----------
+        child: Union[AbstractTreeItem, str]
+            Child may be passed directly, or the childs UID may be passed as
+            a string.
+
+        Raises
+        ------
+        ValueError:
+            If child does not exist within this object.
+        """
         # Allow children to be removed by UID
         if isinstance(child, str):
             child = self._child_map[child]
@@ -199,22 +241,18 @@ class BaseTreeItem(AbstractTreeItem):
         self.update()
         return True
 
-    def child_count(self):
+    def child_count(self) -> int:
         """Return number of children belonging to this object"""
         return len(self._children)
 
-    def column_count(self):
+    def column_count(self) -> int:
         """Default column count is 1, and the current models expect a single
         column Tree structure."""
         return 1
 
-    def indexof(self, child) -> Union[int, None]:
+    def indexof(self, child) -> int:
         """Return the index of a child contained in this object"""
-        try:
-            return self._children.index(child)
-        except ValueError:
-            print("Invalid child passed to indexof")
-            return -1
+        return self._children.index(child)
 
     def row(self) -> Union[int, None]:
         """Return the row index of this TreeItem relative to its parent"""
@@ -223,8 +261,17 @@ class BaseTreeItem(AbstractTreeItem):
         return 0
 
     def flags(self) -> int:
-        """Returns default flags for Tree Items, override this to enable
-        custom behavior in the model."""
+        """
+        Returns default flags for Tree Items, override this to enable
+        custom behavior in the model.
+
+        Flags can be combined using bitwise OR ( | ) operator.
+
+        Returns
+        -------
+        QtItemFlags:
+            ItemIsSelectable | ItemIsEnabled
+        """
         return QtItemFlags.ItemIsSelectable | QtItemFlags.ItemIsEnabled
 
     def update(self, **kwargs):
@@ -278,18 +325,24 @@ class TreeItem(BaseTreeItem):
 
     def data(self, role: QtDataRoles):
         """
-        Return contextual data based on supplied role.
-        If a role is not defined or handled by descendents they should return
-        None, and the model should be take this into account.
-        TreeType provides a basic default implementation, which will also
-        handle common style parameters. Descendant classes should provide
-        their own definition to override specific roles, and then call the
-        base data() implementation to handle style application. e.g.
-        >>> def data(self, role: QtDataRoles):
-        >>>     if role == QtDataRoles.DisplayRole:
-        >>>         return "Custom Display: " + self.name
-        >>>     # Allow base class to apply styles if role not caught above
-        >>>     return super().data(role)
+        Returns data based on role.
+
+        - DisplayRole returns the str() representation of this object.
+        - ToolTipRole returns the UID str of this object.
+
+        This class supports limited user defined styling, and will handle
+        queries for the following item styling roles (if the style property
+        for the corresponding role has been set):
+
+        - BackgroundRole
+        - ForegroundRole
+        - DecorationRole
+        - Font Role
+
+        Parameters
+        ----------
+        role: QtDataRoles
+            Role for which to return data
         """
         if role == QtDataRoles.DisplayRole:
             return str(self)
@@ -308,7 +361,12 @@ class TreeLabelItem(BaseTreeItem):
     """
     A simple Tree Item with a label, to be used as a header/label. This
     TreeItem accepts children.
+
+    This TreeItem is primarily designed for use in the Plot/Channel TreeView,
+    and supports a max_children property (currently implemented by the model
+    independent of this Class)
     """
+    # TODO: Implement supports_drop and max_children properties
     def __init__(self, label: str, supports_drop=False, max_children=None,
                  parent=None):
         super().__init__(uid=gen_uuid('ti'), parent=parent)
@@ -318,6 +376,8 @@ class TreeLabelItem(BaseTreeItem):
 
     @property
     def droppable(self):
+        # TODO: Unused, implement this in a flags() override
+        # TODO: The model will need to properly check flags
         if not self._supports_drop:
             return False
         if self._max_children is None:
