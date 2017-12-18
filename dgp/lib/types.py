@@ -2,9 +2,9 @@
 
 from abc import ABCMeta, abstractmethod
 from collections import namedtuple
-from typing import Union, Generator
+from typing import Union, Generator, List
 
-from pandas import Series
+from pandas import Series, DataFrame
 
 from dgp.lib.etc import gen_uuid
 from dgp.gui.qtenum import QtItemFlags, QtDataRoles
@@ -132,6 +132,10 @@ class BaseTreeItem(AbstractTreeItem):
     def parent(self, value: AbstractTreeItem):
         """Sets the parent of this object."""
         if value is None:
+            # try:
+            #     self._parent.remove_child(self)
+            # except ValueError:
+            #     print("Couldn't reove self from parent")
             self._parent = None
             return
         assert isinstance(value, AbstractTreeItem)
@@ -205,7 +209,7 @@ class BaseTreeItem(AbstractTreeItem):
         self._child_map[child.uid] = child
         self.update()
 
-    def remove_child(self, child: Union[AbstractTreeItem, str]) -> None:
+    def remove_child(self, child: Union[AbstractTreeItem, str]) -> bool:
         """
         Remove a child of this object by reference, or by UID
 
@@ -223,13 +227,13 @@ class BaseTreeItem(AbstractTreeItem):
         # Allow children to be removed by UID
         if isinstance(child, str):
             child = self._child_map[child]
-
         if child not in self._children:
-            raise ValueError("Child does not exist for this parent")
-        # child.parent = None
+            return False
+        child.parent = None
         del self._child_map[child.uid]
         self._children.remove(child)
         self.update()
+        return True
 
     def insert_child(self, child: AbstractTreeItem, index: int) -> bool:
         if index == -1:
@@ -252,7 +256,11 @@ class BaseTreeItem(AbstractTreeItem):
 
     def indexof(self, child) -> int:
         """Return the index of a child contained in this object"""
-        return self._children.index(child)
+        try:
+            return self._children.index(child)
+        except ValueError:
+            print("Invalid child passed to indexof")
+            return -1
 
     def row(self) -> Union[int, None]:
         """Return the row index of this TreeItem relative to its parent"""
@@ -357,7 +365,7 @@ class TreeItem(BaseTreeItem):
         return None
 
 
-class TreeLabelItem(BaseTreeItem):
+class ChannelListHeader(BaseTreeItem):
     """
     A simple Tree Item with a label, to be used as a header/label. This
     TreeItem accepts children.
@@ -366,23 +374,21 @@ class TreeLabelItem(BaseTreeItem):
     and supports a max_children property (currently implemented by the model
     independent of this Class)
     """
-    # TODO: Implement supports_drop and max_children properties
-    def __init__(self, label: str, supports_drop=False, max_children=None,
-                 parent=None):
-        super().__init__(uid=gen_uuid('ti'), parent=parent)
-        self.label = label
+    def __init__(self, index: int=-1, ctype='Available', supports_drop=True,
+                 max_children=None, parent=None):
+        super().__init__(uid=gen_uuid('clh_'), parent=parent)
+        self.label = '{ctype} #{index}'.format(ctype=ctype, index=index)
+        self.index = index
         self._supports_drop = supports_drop
-        self._max_children = max_children
+        self.max_children = max_children
 
     @property
     def droppable(self):
-        # TODO: Unused, implement this in a flags() override
-        # TODO: The model will need to properly check flags
         if not self._supports_drop:
             return False
-        if self._max_children is None:
+        if self.max_children is None:
             return True
-        if self.child_count() >= self._max_children:
+        if self.child_count() >= self.max_children:
             return False
         return True
 
@@ -390,6 +396,9 @@ class TreeLabelItem(BaseTreeItem):
         if role == QtDataRoles.DisplayRole:
             return self.label
         return None
+
+    def remove_child(self, child: Union[AbstractTreeItem, str]):
+        super().remove_child(child)
 
 
 class FlightLine(TreeItem):
@@ -459,18 +468,62 @@ class FlightLine(TreeItem):
 
 
 class DataSource(BaseTreeItem):
-    def __init__(self, uid, filename, fields, dtype):
+    """
+    The DataSource object is designed to hold a reference to a given UID/File
+    that has been imported and stored by the Data Manager.
+    This object provides a method load() that enables the caller to retrieve
+    the data pointed to by this object from the Data Manager.
+
+    As DataSource is derived from BaseTreeItem, it supports being displayed
+    in a QTreeView via an AbstractItemModel derived class.
+
+    Attributes
+    ----------
+    filename : str
+        Record of the canonical path of the original data file.
+    fields : list(str)
+        List containing names of the fields (columns) available from the
+        source data.
+    dtype : str
+        Data type (i.e. GPS/Gravity) of the data pointed to by this object.
+
+    """
+    def __init__(self, uid, filename: str, fields: List[str], dtype: str):
         """Create a DataSource item with UID matching the managed file UID
         that it points to."""
         super().__init__(uid)
         self.filename = filename
         self.fields = fields
         self.dtype = dtype
-        self.channels = [DataChannel(field, self) for field in
-                         fields]
 
-    def load(self, field):
-        return dm.get_manager().load_data(self.uid)[field]
+    def get_channels(self) -> List['DataChannel']:
+        """
+        Create a new list of DataChannels.
+
+        Notes
+        -----
+        The reason we construct a new list of new DataChannels instances is
+        due the probability of the DataChannels being used in multiple
+        models.
+
+        If we returned instead a reference to previously created instances,
+        we would unpredictable behavior when their state or parent is modified.
+
+        Returns
+        -------
+        channels : List[DataChannel]
+            List of DataChannels constructed from fields available to this
+            DataSource.
+
+        """
+        return [DataChannel(field, self) for field in self.fields]
+
+    def load(self, field=None) -> Union[Series, DataFrame]:
+        """Load data from the DataManager and return the specified field."""
+        data = dm.get_manager().load_data(self.uid)
+        if field is not None:
+            return data[field]
+        return data
 
     def data(self, role: QtDataRoles):
         if role == QtDataRoles.DisplayRole:
@@ -490,17 +543,36 @@ class DataChannel(BaseTreeItem):
         self.field = label
         self._source = source
         self.plot_style = ''
-        self._plot_axes = -1
+        self.units = ''
+        self._plotted = False
+        self._index = -1
 
     @property
     def plotted(self):
-        return self._plot_axes
+        return self._plotted
 
-    @plotted.setter
-    def plotted(self, value):
-        self._plot_axes = value
+    @property
+    def index(self):
+        if not self._plotted:
+            return -1
+        return self._index
+
+    def plot(self, index: Union[int, None]) -> None:
+        if index is None:
+            self._plotted = False
+            self._index = -1
+        else:
+            self._index = index
+            self._plotted = True
 
     def series(self, force=False) -> Series:
+        """Return the pandas Series referenced by this DataChannel
+        Parameters
+        ----------
+        force : bool, optional
+            Reserved for future use, force the DataManager to reload the
+            Series from disk.
+        """
         return self._source.load(self.field)
 
     def data(self, role: QtDataRoles):
@@ -513,4 +585,15 @@ class DataChannel(BaseTreeItem):
     def flags(self):
         return super().flags() | QtItemFlags.ItemIsDragEnabled | \
                QtItemFlags.ItemIsDropEnabled
+
+    def orphan(self):
+        """Remove the current object from its parents' list of children."""
+        if self.parent is None:
+            return True
+        try:
+            parent = self.parent
+            res = parent.remove_child(self)
+            return res
+        except ValueError:
+            return False
 
