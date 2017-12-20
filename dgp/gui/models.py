@@ -405,41 +405,16 @@ class ChannelListModel(BaseTreeModel):
 
     """
 
-    # plotOverflow = pyqtSignal(str)  # type: pyqtBoundSignal
-    # channelChanged = pyqtSignal(int, DataChannel)  # type: pyqtBoundSignal
-
-    """
-    Each plot has a header that channels can then be dragged to from the
-    available channel list.
-    The available channels list (displayed below the plot headers is
-    constructed from the list of channels supplied.
-    The plot headers limit the number of items that can be children to 2,
-    this is so that the MatplotLib plotting canvas can display a left and
-    right Y axis scale for each plot.
-
-    Parameters
-    ----------
-    channels : List[DataChannel]
-        List of DataChannels to add to the model upon instantiation
-    plots: int
-        Number of plot headings to generate
-    parent:
-        Optional Qt GUI Parent
-    """
-
     plotOverflow = pyqtSignal(str)  # type: pyqtBoundSignal
     """
-    SIGNAL pyqtSignal(str):
-    
-    Emits UID of item, when dropping item would exceed child limit on a 
-    plot header.
+    SIGNAL pyqtSignal(str)
     """
-    channelChanged = pyqtSignal(int, int, DataChannel)  # type: pyqtBoundSignal
+    channelChanged = pyqtSignal(int, DataChannel)  # type: pyqtBoundSignal
     """
-    SIGNAL pyqtSignal(int, int, DataChannel)
+    SIGNAL pyqtSignal(int, DataChannel)
     
-    Emits (new_index: int, old_index: int, channel: DataChannel) upon 
-    sucessful drag-drop action of a data channel.
+    Emits (new_index: int, channel: DataChannel) upon sucessful drag-drop 
+    action of a data channel.
     """
 
     def __init__(self, channels: List[DataChannel], plots: int, parent=None):
