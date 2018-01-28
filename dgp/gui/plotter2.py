@@ -2,13 +2,18 @@
 
 # PROTOTYPE new LineGrabPlot class based on mplutils utility classes
 import logging
+from abc import ABCMeta, abstractmethod
+from typing import Union
+from itertools import cycle
 
 import matplotlib as mpl
-from PyQt5.QtWidgets import QSizePolicy, QMenu, QAction, QWidget, QToolBar
+import pandas as pd
+from PyQt5.QtWidgets import QSizePolicy, QMenu, QAction, QWidget
 from PyQt5.QtCore import pyqtSignal, QMimeData
 from PyQt5.QtGui import QCursor, QDropEvent, QDragEnterEvent, QDragMoveEvent
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
+import PyQt5.QtGui as QtGui
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT)
 from matplotlib.figure import Figure
@@ -20,6 +25,9 @@ from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
 import numpy as np
+import pyqtgraph as pg
+from pyqtgraph.graphicsItems import AxisItem
+from pyqtgraph.widgets.PlotWidget import PlotWidget, PlotItem
 
 from dgp.lib.project import Flight
 
@@ -60,7 +68,7 @@ graphically specify flight lines through the following functionality:
 
 """
 
-__all__ = ['FlightLinePlot']
+__all__ = ['FlightLinePlot', 'TransformPlotWidget']
 
 
 class BasePlottingCanvas(FigureCanvas):
@@ -105,6 +113,7 @@ class FlightLinePlot(BasePlottingCanvas):
         super().__init__(parent=parent, width=width, height=height, dpi=dpi)
 
         self._flight = flight
+        # Allow dependency injection
         self.mgr = kwargs.get('axes_mgr', None) or StackedAxesManager(
             self.figure, rows=rows)
         self.pm = kwargs.get('patch_mgr', None) or PatchManager(parent=parent)
@@ -261,3 +270,202 @@ class FlightLinePlot(BasePlottingCanvas):
                                label=active.label))
             self.pm.deselect()
             self.figure.canvas.draw()
+
+
+class DateAxis(pg.AxisItem):
+    def tickStrings(self, values, scale, spacing):
+        if not values:
+            rng = 0
+        else:
+            rng = max(values)-min(values)
+        # print("Range: ", rng, " scale: ", scale, " spacing: ", spacing)
+        strns = []
+
+        if rng < 1e12:
+            strfmt = '%H:%M:%S'
+        else:
+            strfmt = '%Y-%m-%d %H:%M'
+
+        for x in values:
+            try:
+                strns.append(pd.to_datetime(x).strftime(strfmt))
+                # strns.append(time.strftime(string, time.localtime(x)))
+            except ValueError:  ## Windows can't handle dates before 1970
+                strns.append('')
+            except OSError:
+                print("OS Error in Date Formatter")
+        return strns
+
+    def tickSpacing(self, minVal, maxVal, size):
+        # print("Get tickSpacing: minVal {}  maxVal {}  size {}".format(minVal,
+        #                                                               maxVal,
+        #                                                               size))
+        # print("Min/max diff: ", maxVal - minVal)
+        return super().tickSpacing(minVal, maxVal, size)
+
+
+class TransformPlotWidget(QWidget):
+    """
+    Plot(s) based on pyqtgraph API used for fast data visualization for
+    Transformation/filtering operations.
+
+    Requirements:
+    Multiple plots should be able to share an X-axis
+    Support Date formatter for x-axis
+    Date formatter should be optional, however? What if we need to plot vs
+    scalar latitude/longitude.
+
+
+    """
+    def __init__(self, rows=2, sharex=True, parent=None):
+        super().__init__(parent=parent)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                           QtWidgets.QSizePolicy.Expanding)
+        self.layout = QtWidgets.QVBoxLayout()
+        self.setLayout(self.layout)
+        self.plots = []
+
+        for i in range(rows):
+            nplot = PlotWidget(parent=self,
+                               axisItems={'bottom': DateAxis(
+                                   orientation='bottom')},
+                               background='w')
+            if i > 0 and sharex:
+                nplot.setXLink(self.plots[0])
+            nplot.addLegend(offset=(-15, 15))
+            self.plots.append(nplot)
+            self.layout.addWidget(nplot)
+
+    def get_plot(self, row=0):
+        return self.plots[row]
+
+
+class SeriesPlotter(metaclass=ABCMeta):
+    colors = ['r', 'g', 'b', 'g']
+    colorcycle = cycle([{'color': v} for v in colors])
+
+    def __getattr__(self, item):
+        """Passes attribute calls to underlying plotter object if no override
+        in SeriesPlotter implementation."""
+        if hasattr(self.plotter, item):
+            attr = getattr(self.plotter, item)
+            return attr
+        raise AttributeError(item)
+
+    @property
+    @abstractmethod
+    def plotter(self) -> Union[Axes, PlotItem]:
+        """This property should return the underlying plot object, either a
+        Matplotlib Axes or a PyQtgraph PlotItem"""
+        pass
+
+    @property
+    @abstractmethod
+    def items(self):
+        """This property should return a list or a generator which yields the
+        items plotted on the plot."""
+        pass
+
+    @abstractmethod
+    def add_series(self, series, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def remove_series(self, series):
+        pass
+
+    @abstractmethod
+    def draw(self) -> None:
+        pass
+
+    @abstractmethod
+    def clear(self) -> None:
+        """This method should clear all items from the Plotter"""
+        pass
+
+
+# Maybe use a Metaclass to dynamically generate methods based on the type of
+# plot?
+class PlotItemWrapper(SeriesPlotter):
+    def __init__(self, plot):
+        assert isinstance(plot, PlotItem)
+
+        self._plot = plot
+        self._lines = {}  # id(Series): line
+
+    @property
+    def plotter(self) -> PlotItem:
+        return self._plot
+
+    @property
+    def items(self):
+        for item in self._lines.values():
+            yield item
+
+    def add_series(self, series: pd.Series, *args, **kwargs):
+        """Take in a pandas Series, add it to the plot and retain a
+        reference."""
+        sid = id(series)
+        if sid in self.lines:
+            print("Series already plotted")
+            return
+        xvals = pd.to_numeric(series.index, errors='coerce')
+        yvals = pd.to_numeric(series.values, errors='coerce')
+
+        line = self.plot.plot(x=xvals, y=yvals,
+                              name=series.name,
+                              pen=next(self.colorcycle))
+        self._lines[sid] = line
+
+    def remove_series(self, series):
+        sid = id(series)
+        if sid not in self._lines:
+            return
+        try:
+            self._plot.legend.removeItem(self._lines[sid].name())
+        except:
+            pass
+        self._plot.removeItem(self._lines[sid])
+        del self._lines[sid]
+
+    def draw(self):
+        """Draw is uncecesarry for Pyqtgraph plots"""
+        pass
+
+    def clear(self):
+        pass
+
+
+class MPLAxesWrapper(SeriesPlotter):
+    def __init__(self, plot, canvas=None):
+        assert isinstance(plot, Axes)
+        self._plot = plot
+        self._lines = {}  # id(Series): Line2D
+        self._canvas = canvas
+        pass
+
+    @property
+    def plotter(self) -> Axes:
+        return self._plot
+
+    @property
+    def items(self):
+        pass
+
+    def add_series(self, series, *args, **kwargs):
+        line = self.plot.plot(series.index, series.values,
+                              color=next(self.colorcycle)['color'],
+                              label=series.name)
+        self.draw()
+
+    def remove_series(self, series):
+        sid = id(series)
+        line = self._lines[sid]  # type: Line2D
+        line.remove()
+        del self._lines[sid]
+
+    def draw(self) -> None:
+        pass
+
+    def clear(self) -> None:
+        pass

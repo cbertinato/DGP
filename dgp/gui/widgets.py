@@ -17,11 +17,12 @@ from pyqtgraph.flowchart import Flowchart
 import dgp.gui.models as models
 import dgp.lib.types as types
 from dgp.lib.enums import DataTypes
-from .plotter import LineGrabPlot, LineUpdate
 from dgp.lib.project import Flight
 from dgp.lib.etc import gen_uuid
 from dgp.gui.dialogs import ChannelSelectionDialog
-from dgp.lib.transform import *
+from dgp.lib.transform import LIBRARY
+from .plotter import LineGrabPlot, LineUpdate
+from .plotter2 import TransformPlotWidget
 
 
 # Experimenting with drag-n-drop and custom widgets
@@ -190,6 +191,7 @@ class TransformTab(WorkspaceWidget):
 
         self.fc = None
         self.plots = []
+        self._nodes = {}
         self._init_flowchart()
         self.populate_flowchart()
 
@@ -206,21 +208,26 @@ class TransformTab(WorkspaceWidget):
         fc_ctrl_widget.ui.reloadBtn.setEnabled(False)
         self._layout.addWidget(fc_ctrl_widget, 0, 0, 2, 1)
 
-        plot_1 = pg.PlotWidget()
-        self._layout.addWidget(plot_1, 0, 1)
-        plot_2 = pg.PlotWidget()
-        self._layout.addWidget(plot_2, 1, 1)
-        plot_list = {'Top Plot': plot_1, 'Bottom Plot': plot_2}
+        # TESTING MPL Plot #
+        # plot1 = BasePlottingCanvas()
+        # axes = plot1.figure.add_subplot(1, 1, 1)
+        # axes.grid(True)
+        # self._layout.addWidget(plot1, 0, 1)
+        # mpl_node = fc.createNode('MPLPlotNode', pos=(0, -150))
+        # mpl_node.set_plot(axes, plot1.figure.canvas)
 
-        plotnode_1 = fc.createNode('PlotWidget', pos=(0, -150))
-        plotnode_1.setPlotList(plot_list)
-        plotnode_1.setPlot(plot_1)
-        plotnode_2 = fc.createNode('PlotWidget', pos=(150, -150))
-        plotnode_2.setPlotList(plot_list)
-        plotnode_2.setPlot(plot_2)
+        # TESTING Custom Pyqtchart Plot #
+        plot_mgr = TransformPlotWidget(rows=2)
+        self._layout.addWidget(plot_mgr, 0, 1)
+        plot_node = fc.createNode('PGPlotNode', pos=(0, -250))
+        plot_node.setPlot(plot_mgr.plots[0])
 
-        self.plots.append(plotnode_1)
-        self.plots.append(plotnode_2)
+        plot_node2 = fc.createNode('PGPlotNode', pos=(150, -250))
+        plot_node2.setPlot(plot_mgr.plots[1])
+
+        self.plots.append(plot_node)
+        self.plots.append(plot_node2)
+
         self.fc = fc
 
     def populate_flowchart(self):
@@ -236,6 +243,9 @@ class TransformTab(WorkspaceWidget):
             fc.setInput(Gravity=grav.load())
             demux = LIBRARY.getNodeType('LineDemux')('Demux', self.flight)
             fc.addNode(demux, 'Demux')
+            filt_node = fc.createNode('FIRLowpassFilter', pos=(150, 150))
+            fc.connectTerminals(fc['Gravity'], filt_node['data_in'])
+            fc.connectTerminals(filt_node['data_out'], self.plots[0]['In'])
 
         if gps is not None:
             fc.setInput(Trajectory=gps.load())
