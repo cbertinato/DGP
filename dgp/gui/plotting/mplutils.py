@@ -7,7 +7,6 @@ from itertools import cycle, count, chain
 from typing import Union, Tuple, Dict, List
 from datetime import datetime, timedelta
 
-import PyQt5.QtWidgets as QtWidgets
 import PyQt5.QtCore as QtCore
 
 from pandas import Series
@@ -19,12 +18,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.gridspec import GridSpec
 from matplotlib.backend_bases import MouseEvent, PickEvent
-from matplotlib.backends.backend_qt5agg import (FigureCanvasQTAgg,
-                                                NavigationToolbar2QT)
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-
-from pyqtgraph.widgets.GraphicsView import GraphicsView
-from pyqtgraph.widgets.PlotWidget import PlotWidget
 
 from dgp.lib.etc import gen_uuid
 
@@ -813,98 +807,5 @@ class RectanglePatchGroup:
         ylims = patch.axes.get_ylim()
         cy = ylims[0] + abs(ylims[1] - ylims[0]) * 0.5
         return cx, cy
-
-
-"""
-Rationale for StackedMPLWidget and StackedPGWidget:
-Each of these classes should act as a drop-in replacement for the other, 
-presenting as a single widget that can be added to a Qt Layout.
-Both of these classes are designed to create a variable number of plots 
-'stacked' on top of each other - as in rows.
-MPLWidget will thus contain a series of Axes classes which can be used to 
-plot on
-PGWidget will contain a series of PlotItem classes which likewise can be used to 
-plot.
-
-It remains to be seen if the Interface/ABC SeriesPlotter and its descendent 
-classes PlotItemWrapper and MPLAxesWrapper are necessary - the intent of 
-these classes was to wrap a PlotItem or Axes and provide a unified standard 
-interface for plotting. However, the Stacked*Widget classes might nicely 
-encapsulate what was intended there.
-"""
-
-
-class StackedMPLWidget(FigureCanvasQTAgg):
-    def __init__(self, rows=1, sharex=True, width=8, height=4, dpi=100,
-                 parent=None):
-        super().__init__(Figure(figsize=(width, height), dpi=dpi,
-                                tight_layout=True))
-        self.setParent(parent)
-        super().setSizePolicy(QtWidgets.QSizePolicy.Expanding,
-                              QtWidgets.QSizePolicy.Expanding)
-        super().updateGeometry()
-
-        self.figure.canvas.mpl_connect('pick_event', self.onpick)
-        self.figure.canvas.mpl_connect('button_press_event', self.onclick)
-        self.figure.canvas.mpl_connect('button_release_event', self.onrelease)
-        self.figure.canvas.mpl_connect('motion_notify_event', self.onmotion)
-
-        self._plots = []
-
-        spec = GridSpec(nrows=rows, ncols=1)
-        for row in range(rows):
-            if row >= 1 and sharex:
-                plot = self.figure.add_subplot(spec[row], sharex=self._plots[0])
-            else:
-                plot = self.figure.add_subplot(spec[row])
-
-            if row == rows - 1:
-                # Add x-axis ticks on last plot only
-                plot.xaxis.set_major_locator(AutoLocator())
-                # TODO: Dynamically apply this
-                plot.xaxis.set_major_formatter(DateFormatter("%H:%M:%S"))
-            self._plots.append(plot)
-
-    def get_plot(self, row):
-        return self._plots[row]
-
-    def onclick(self, event: MouseEvent):
-        pass
-
-    def onrelease(self, event: MouseEvent):
-        pass
-
-    def onmotion(self, event: MouseEvent):
-        pass
-
-    def onpick(self, event: PickEvent):
-        pass
-
-
-# Look into using a pyqtgraph.widgets.GraphicsLayoutWidget
-class StackedPGWidget(QtWidgets.QWidget):
-    """Implements a QWidget and uses a VBoxLayout to present a series of
-    PlotWidgets vertically arranged."""
-    def __init__(self, rows=1, background='default', sharex=True, parent=None):
-        super().__init__(parent=parent)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
-                           QtWidgets.QSizePolicy.Expanding)
-        self.setLayout(QtWidgets.QVBoxLayout())
-
-        self._plots = []  # type: List[PlotWidget]
-
-        for row in range(rows):
-            plot_w = PlotWidget(parent=self, background=background)
-            if row >= 1 and sharex:
-                plot_w.setXLink(self._plots[0])
-            plot_w.addLegend(offset=(-15, 15))
-
-            self._plots.append(plot_w)
-            self.layout().addWidget(plot_w)
-
-    def get_plot(self, row):
-        return self._plots[row]
-
-
 
 

@@ -9,6 +9,8 @@ from matplotlib.axes import Axes
 from pyqtgraph.flowchart import Node, Terminal
 from pyqtgraph.flowchart.library.Display import PlotWidgetNode
 
+from ...gui.plotting.backends import SeriesPlotter
+
 """Containing display Nodes to translate between pyqtgraph Flowchart and an
 MPL plot"""
 
@@ -60,7 +62,7 @@ class PGPlotNode(Node):
         self.color_cycle = cycle([dict(color=(255, 193, 9)),
                                   dict(color=(232, 102, 12)),
                                   dict(color=(183, 12, 232))])
-        self.plot = None
+        self.plot = None  # type: SeriesPlotter
         self.items = {}  # SourceTerm: PlotItem
 
     def setPlot(self, plot):
@@ -88,29 +90,14 @@ class PGPlotNode(Node):
                     # Item is already added to the correct scene
                     items.add(uid)
                 else:
-                    # Add the item to the plot, or generate a new item if needed
-                    # Need to convert series index/values to numeric type
-                    # Otherwise numpy.isnan complains
-                    xvals = to_numeric(series.index, errors='coerce')
-                    yvals = to_numeric(series.values, errors='coerce')
-
-                    item = self.plot.plot(x=xvals, y=yvals,
-                                          name=series.name,
-                                          pen=next(self.color_cycle))
+                    item = self.plot.add_series(series)
                     self.items[uid] = item
                     items.add(uid)
 
-            # Any left-over items that did not appear in the input must be removed
+            #  Remove any left-over items that did not appear in the input
             for uid in list(self.items.keys()):
                 if uid not in items:
-                    # PlotWidget getattr wrapper fails when trying to
-                    # retrieve 'legend' attr from the plotItem
-                    # So we must access it directly
-                    # This is because the PlotWidget getattr method only
-                    # returns callable attributes from the underlying PlotItem
-                    self.plot.plotItem.legend.removeItem(
-                        self.items[uid].name())
-                    self.plot.removeItem(self.items[uid])
+                    self.plot.remove_series(uid)
                     del self.items[uid]
 
     def ctrlWidget(self):

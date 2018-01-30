@@ -1,45 +1,378 @@
 # coding: utf-8
 
 """
-Class to handle Matplotlib plotting of data to be displayed in Qt GUI
+Definitions for task specific plot interfaces.
 """
-
-from dgp.lib.etc import gen_uuid
-
 import logging
 from collections import namedtuple
-from typing import Dict, Tuple, Union
+from itertools import count
+from typing import Dict, Tuple, Union, List
 from datetime import timedelta
 
-from PyQt5.QtWidgets import QSizePolicy, QMenu, QAction, QWidget, QToolBar
-from PyQt5.QtCore import pyqtSignal, QMimeData
-from PyQt5.QtGui import QCursor, QDropEvent, QDragEnterEvent, QDragMoveEvent
+import numpy as np
+import pandas as pd
 import PyQt5.QtCore as QtCore
 import PyQt5.QtWidgets as QtWidgets
+
+from PyQt5.QtWidgets import QSizePolicy, QAction, QWidget, QMenu, QToolBar
+from PyQt5.QtCore import pyqtSignal, QMimeData
+from PyQt5.QtGui import QCursor, QDropEvent, QDragEnterEvent, QDragMoveEvent
 from matplotlib.backends.backend_qt5agg import (
-   FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar)
+    FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT)
 from matplotlib.figure import Figure
-from matplotlib.axes import Axes
-from matplotlib.dates import DateFormatter, num2date, date2num
-from matplotlib.ticker import NullFormatter, NullLocator, AutoLocator
 from matplotlib.backend_bases import MouseEvent, PickEvent
 from matplotlib.patches import Rectangle
+from matplotlib.axes import Axes
+from matplotlib.dates import DateFormatter, num2date, date2num
+from matplotlib.ticker import AutoLocator
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation
-import numpy as np
 
-from dgp.lib.project import Flight
 import dgp.lib.types as types
+from dgp.lib.project import Flight
+from dgp.lib.types import DataChannel, LineUpdate
+from dgp.lib.etc import gen_uuid
+from .mplutils import *
+from .backends import BasePlot, PYQTGRAPH, MATPLOTLIB, SeriesPlotter
 
+import pyqtgraph as pg
+from pyqtgraph.graphicsItems.LinearRegionItem import LinearRegionItem
 
 _log = logging.getLogger(__name__)
+
+
+class TransformPlot:
+    """Plot interface used for displaying transformation results.
+    May need to display data plotted against time series or scalar series.
+    """
+    def __init__(self, rows=2, cols=1, sharex=True, sharey=False, grid=True,
+                 parent=None):
+        self.widget = BasePlot(backend=PYQTGRAPH, rows=rows, cols=cols,
+                               sharex=sharex, sharey=sharey, grid=grid,
+                               background='w', parent=parent)
+
+    @property
+    def plots(self) -> List[SeriesPlotter]:
+        return self.widget.plots
+
+
+class LineSelectPlot:
+    """New prototype Flight Line selection plot using Pyqtgraph as the
+    backend.
+    Much work to be done here still
+    """
+    def __init__(self, rows=3, parent=None):
+        self.widget = BasePlot(backend=PYQTGRAPH, rows=rows, cols=1,
+                               sharex=True, grid=True, background='w',
+                               parent=parent)
+        self.widget.add_onclick_handler(self.onclick)
+        self._lri_id = count()
+        self._selections = {}
+        self._group_map = {}
+        self._updating = False
+
+    @property
+    def plots(self) -> List[SeriesPlotter]:
+        return self.widget.plots
+
+    def onclick(self, ev):
+        event = ev[0]
+        button = event.button()
+        if button != 1:
+            return
+
+        print("button pressed: ", button)
+
+        p0 = self.plots[0]
+        if p0.vb is None:
+            return
+
+        print("p0 left width: ", p0.getAxis('left').fixedWidth)
+        # Try to correct for offset in coordinates due to left axis labels
+        # This still isn't working perfectly though
+        leftmargin = p0.getAxis('left').fixedWidth
+        x0, x1 = p0.get_xlim()
+        pos = ev[0].pos()  # type: pg.Point
+        corr_pos = pg.Point(pos[0] + leftmargin, pos[1])
+        data_x = p0.vb.mapSceneToView(corr_pos).x()
+
+        print("click x in data coords: ", pd.to_datetime(data_x).strftime(
+            "%H:%M:%S"))
+        x_rng = x1 - x0
+        patch_region = [data_x, data_x + (x_rng * 0.05)]
+
+        lri_group = []
+        grpid = next(self._lri_id)
+
+        for i, plot in enumerate(self.plots):
+            lri = LinearRegionItem()
+            plot.addItem(lri)
+            lri.setRegion(patch_region)
+            lri_group.append(lri)
+            lri.sigRegionChanged.connect(self.update)
+            self._group_map[lri] = grpid
+
+        self._selections[grpid] = lri_group
+
+    def update(self, item: LinearRegionItem):
+        """Update other LinearRegionItems in the group of 'item' to match the
+        new region.
+        We must set a flag here as we only want to process updates from the
+        first source - as this update will be called during the update
+        process because LinearRegionItem.setRegion() raises a
+        sigRegionChanged event."""
+        if self._updating:
+            return
+        self._updating = True
+
+        new_region = item.getRegion()
+        grpid = self._group_map[item]
+        group = self._selections[grpid]
+        for select in group:  # type: LinearRegionItem
+            if select is item:
+                continue
+            select.setRegion(new_region)
+
+        self._updating = False
+
+
+"""Design Requirements of FlightLinePlot:
+
+Use Case:
+FlightLinePlot (FLP) is designed for a specific use case, where the user may 
+plot raw Gravity and GPS data channels on a synchronized x-axis plot in order to 
+select distinct 'lines' of data (where the Ship or Aircraft has turned to 
+another heading).
+
+Requirements:
+ - Able to display 2-4 plots displayed in a row with a linked x-axis scale.
+ - Each plot must have dual y-axis scales and should limit the number of lines 
+plotted to 1 per y-axis to allow for plotting of different channels of widely 
+varying amplitudes.
+- User can enable a 'line selection mode' which allows the user to 
+graphically specify flight lines through the following functionality:
+ - On click, a new semi-transparent rectangle 'patch' is created across all 
+ visible axes. If there is no patch in the area already.
+ - On drag of a patch, it should follow the mouse, allowing the user to 
+ adjust its position.
+ - On click and drag of the edge of any patch it should resize to the extent 
+ of the movement, allowing the user to resize the patches.
+ - On right-click of a patch, a context menu should be displayed allowing 
+ user to label, or delete, or specify precise (spinbox) x/y limits of the patch
+
+"""
+
+
+class BasePlottingCanvas(FigureCanvas):
+    """
+    BasePlottingCanvas sets up the basic Qt FigureCanvas parameters, and is
+    designed to be subclassed for different plot types.
+    Mouse events are connected to the canvas here, and the handlers should be
+    overriden in sub-classes to provide custom actions.
+    """
+    def __init__(self, parent=None, width=8, height=4, dpi=100):
+        super().__init__(Figure(figsize=(width, height), dpi=dpi,
+                                tight_layout=True))
+
+        self.setParent(parent)
+        super().setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        super().updateGeometry()
+
+        self.figure.canvas.mpl_connect('pick_event', self.onpick)
+        self.figure.canvas.mpl_connect('button_press_event', self.onclick)
+        self.figure.canvas.mpl_connect('button_release_event', self.onrelease)
+        self.figure.canvas.mpl_connect('motion_notify_event', self.onmotion)
+
+    def onclick(self, event: MouseEvent):
+        pass
+
+    def onrelease(self, event: MouseEvent):
+        pass
+
+    def onmotion(self, event: MouseEvent):
+        pass
+
+    def onpick(self, event: PickEvent):
+        pass
+
+
+class FlightLinePlot(BasePlottingCanvas):
+    linechanged = pyqtSignal(LineUpdate)
+
+    def __init__(self, flight, rows=3, width=8, height=4, dpi=100,
+                 parent=None, **kwargs):
+        _log.debug("Initializing FlightLinePlot")
+        super().__init__(parent=parent, width=width, height=height, dpi=dpi)
+
+        self._flight = flight
+        # Allow dependency injection
+        self.mgr = kwargs.get('axes_mgr', None) or StackedAxesManager(
+            self.figure, rows=rows)
+        self.pm = kwargs.get('patch_mgr', None) or PatchManager(parent=parent)
+
+        self._home_action = QAction("Home")
+        self._home_action.triggered.connect(lambda *args: print("Home Clicked"))
+        self._zooming = False
+        self._panning = False
+        self._grab_lines = False
+        self._toolbar = None
+
+    def set_mode(self, grab=True):
+        self._grab_lines = grab
+
+    def get_toolbar(self, home_callback=None):
+        """Configure and return the Matplotlib Toolbar used to interactively
+        control the plot area.
+        Here we replace the default MPL Home action with a custom action,
+        and attach additional callbacks to the Pan and Zoom buttons.
+        """
+        if self._toolbar is not None:
+            return self._toolbar
+
+        def toggle(action):
+            if action.lower() == 'zoom':
+                print("Toggling zoom")
+                self._panning = False
+                self._zooming = not self._zooming
+            elif action.lower() == 'pan':
+                print("Toggling Pan")
+                self._zooming = False
+                self._panning = not self._panning
+            else:
+                self._zooming = False
+                self._panning = False
+
+        tb = NavigationToolbar2QT(self, parent=None)
+        _home = tb.actions()[0]
+
+        new_home = QAction(_home.icon(), "Home", parent=tb)
+        home_callback = home_callback or (lambda *args: None)
+        new_home.triggered.connect(home_callback)
+        new_home.setToolTip("Reset View")
+        tb.insertAction(_home, new_home)
+        tb.removeAction(_home)
+
+        tb.actions()[4].triggered.connect(lambda x: toggle('pan'))
+        tb.actions()[5].triggered.connect(lambda x: toggle('zoom'))
+        self._toolbar = tb
+        return tb
+
+    def add_series(self, channel: DataChannel, row=0, draw=True):
+        self.mgr.add_series(channel.series(), row=row, uid=channel.uid)
+
+    def onclick(self, event: MouseEvent):
+        if not self._grab_lines or self._zooming or self._panning:
+            print("Not in correct mode")
+            return
+        # If the event didn't occur within an Axes, ignore it
+        if event.inaxes not in self.mgr:
+            return
+
+        # Else, process the click event
+        # Get the patch group at click loc if it exists
+        active = self.pm.select(event.xdata, inner=False)
+        print("Active group: ", active)
+
+        # Right Button
+        if event.button == 3 and active:
+            cursor = QCursor()
+            self._pop_menu.popup(cursor.pos())
+            return
+
+        # Left Button
+        elif event.button == 1 and not active:
+            print("Creating new patch group")
+            patches = []
+            for ax, twin in self.mgr:
+                xmin, xmax = ax.get_xlim()
+                width = (xmax - xmin) * 0.05
+                x0 = event.xdata - width / 2
+                y0, y1 = ax.get_ylim()
+                rect = Rectangle((x0, y0), width, height=1, alpha=0.1,
+                                 edgecolor='black', linewidth=2, picker=True)
+                patch = ax.add_patch(rect)
+                patch.set_picker(True)
+                ax.draw_artist(patch)
+                patches.append(patch)
+            pg = RectanglePatchGroup(*patches)
+            self.pm.add_group(pg)
+            self.draw()
+
+            if self._flight.uid is not None:
+                self.linechanged.emit(
+                    LineUpdate(flight_id=self._flight.uid,
+                               action='add',
+                               uid=pg.uid,
+                               start=pg.start(),
+                               stop=pg.stop(),
+                               label=None))
+            return
+        # Middle Button/Misc Button
+        else:
+            return
+
+    def onmotion(self, event: MouseEvent) -> None:
+        """
+        Event Handler: Pass any motion events to the AxesGroup to handle,
+        as long as the user is not Panning or Zooming.
+
+        Parameters
+        ----------
+        event : MouseEvent
+            Matplotlib MouseEvent object with event parameters
+
+        Returns
+        -------
+        None
+
+        """
+        if self._zooming or self._panning:
+            return
+        self.pm.onmotion(event)
+
+    def onrelease(self, event: MouseEvent) -> None:
+        """
+        Event Handler: Process event and emit any changes made to the active
+        Patch group (if any) upon mouse release.
+
+        Parameters
+        ----------
+        event : MouseEvent
+            Matplotlib MouseEvent object with event parameters
+
+        Returns
+        -------
+        None
+
+        """
+        if self._zooming or self._panning:
+            self.pm.rescale_patches()
+            self.draw()
+            return
+
+        active = self.pm.active
+        if active is not None:
+            if active.modified:
+                self.linechanged.emit(
+                    LineUpdate(flight_id=self._flight.uid,
+                               action='modify',
+                               uid=active.uid,
+                               start=active.start(),
+                               stop=active.stop(),
+                               label=active.label))
+            self.pm.deselect()
+            self.figure.canvas.draw()
+
+
+# This code will eventually be replaced with newer classes based on
+# interoperability between MPL and PQG
 EDGE_PROX = 0.005
 
 # Monkey patch the MPL Nav toolbar home button. We'll provide custom action
 # by attaching a event listener to the toolbar action trigger.
 # Save the default home method in case another plot desires the default behavior
-NT_HOME = NavigationToolbar.home
-NavigationToolbar.home = lambda *args: None
+NT_HOME = NavigationToolbar2QT.home
+NavigationToolbar2QT.home = lambda *args: None
 
 
 class AxesGroup:
@@ -861,9 +1194,9 @@ class LineGrabPlot(BasePlottingCanvas, QWidget):
         pg = self.ax_grp.active
         # Replace custom SetLineLabelDialog with builtin QInputDialog
         text, ok = QtWidgets.QInputDialog.getText(self,
-                                                   "Enter Label",
-                                                   "Line Label:",
-                                                   text=pg.label)
+                                                  "Enter Label",
+                                                  "Line Label:",
+                                                  text=pg.label)
         if not ok:
             self.ax_grp.deselect()
             return
@@ -1227,14 +1560,10 @@ class LineGrabPlot(BasePlottingCanvas, QWidget):
             Matplotlib Qt Toolbar used to control this plot instance
         """
         if self._toolbar is None:
-            toolbar = NavigationToolbar(self, parent=parent)
+            toolbar = NavigationToolbar2QT(self, parent=parent)
 
             toolbar.actions()[0].triggered.connect(self.home)
             toolbar.actions()[4].triggered.connect(self.toggle_pan)
             toolbar.actions()[5].triggered.connect(self.toggle_zoom)
             self._toolbar = toolbar
         return self._toolbar
-
-
-class LineSelectionPlot(BasePlottingCanvas):
-    pass
