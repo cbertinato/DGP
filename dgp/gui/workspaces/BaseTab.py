@@ -15,9 +15,18 @@ class BaseTab(QWidget):
         self._flight = flight
         self._uid = gen_uuid('ww')
         self._plot = None
+        self._model = None
 
     def widget(self):
         return None
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, value):
+        self._model = value
 
     @property
     def flight(self) -> Flight:

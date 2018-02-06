@@ -56,23 +56,11 @@ class TransformTab(BaseTab):
         self.fc = fc
         grav = self.flight.get_source(DataTypes.GRAVITY)
         gps = self.flight.get_source(DataTypes.TRAJECTORY)
-        if gps and grav:
-            gps = gps.load()
-            grav = grav.load()
+        if grav is not None:
+            fc.setInput(Gravity=grav.load())
 
-            gps_df = gps.truncate(before=grav.index[0],
-                                  after=grav.index[-1])
-            grav_df = grav.truncate(before=gps_df.index[0],
-                                    after=gps_df.index[-1])
-            print("Gps shape: {}\nGrav Shape: {}".format(gps_df.shape,
-                                                         grav_df.shape))
-            fc.setInput(Gravity=grav_df, Trajectory=gps_df)
-
-        # if grav is not None:
-        #     fc.setInput(Gravity=grav.load())
-        #
-        # if gps is not None:
-        #     fc.setInput(Trajectory=gps.load())
+        if gps is not None:
+            fc.setInput(Trajectory=gps.load())
 
     def populate_flowchart(self):
         """Populate the flowchart/Transform interface with a default
@@ -113,7 +101,6 @@ class TransformTab(BaseTab):
         self.fc.connectTerminals(self.fc['Gravity'], fir_0['data_in'])
         self.fc.connectTerminals(fir_0['data_out'], comp_delay['s1'])
         self.fc.connectTerminals(fir_0['data_out'], self.plots[0]['In'])
-        self.fc.connectTerminals(fir_0['data_out'], add_ser['B'])
 
         # Trajectory Connections
         self.fc.connectTerminals(self.fc['Trajectory'], eotvos['data_in'])
@@ -124,7 +111,7 @@ class TransformTab(BaseTab):
         self.fc.connectTerminals(comp_delay['data_out'], shift['delay'])
         self.fc.connectTerminals(shift['data_out'], fir_1['data_in'])
 
-        # self.fc.connectTerminals(fir_1['data_out'], add_ser['B'])
+        self.fc.connectTerminals(fir_1['data_out'], add_ser['B'])
         self.fc.connectTerminals(add_ser['data_out'], self.plots[1]['In'])
 
     def data_modified(self, action: str, dsrc: DataSource):

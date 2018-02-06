@@ -192,6 +192,9 @@ class StackedMPLWidget(FigureCanvasQTAgg):
             self._plots.append(plot)
             self.plots.append(MPLAxesWrapper(plot, self.figure.canvas))
 
+    def __len__(self):
+        return len(self._plots)
+
     def get_plot(self, row) -> 'SeriesPlotter':
         return self.plots[row]
 
@@ -238,6 +241,16 @@ class PyQtGridPlotWidget(GraphicsView):
                 plot.addLegend(offset=(-15, 15))
                 self._plots.append(plot)
                 self._wrapped.append(PlotWidgetWrapper(plot))
+
+    def __len__(self):
+        return len(self._plots)
+
+    def add_series(self, series, idx=0, *args, **kwargs):
+        return self._wrapped[idx].add_series(series, *args, **kwargs)
+
+    def remove_series(self, series):
+        for plot in self._wrapped:
+            plot.remove_series(id(series))
 
     def add_onclick_handler(self, slot, rateLimit=60):
         sp = SignalProxy(self._gl.scene().sigMouseClicked, rateLimit=rateLimit,
@@ -323,6 +336,9 @@ class PlotWidgetWrapper(SeriesPlotter):
         self._lines = {}  # id(Series): line
         self._data = {}   # id(Series): series
 
+    def __len__(self):
+        return len(self._lines)
+
     @property
     def plotter(self) -> PlotWidget:
         return self._plot
@@ -392,7 +408,6 @@ class PlotWidgetWrapper(SeriesPlotter):
 
     def get_xlim(self):
         return self._plotitem.vb.viewRange()[0]
-
 
 
 class MPLAxesWrapper(SeriesPlotter):

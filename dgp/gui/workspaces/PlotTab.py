@@ -1,4 +1,4 @@
-
+# coding: utf-8
 
 import logging
 
@@ -10,7 +10,7 @@ from . import BaseTab, Flight
 import dgp.gui.models as models
 import dgp.lib.types as types
 from dgp.gui.dialogs import ChannelSelectionDialog
-from dgp.gui.plotting.plotters import LineGrabPlot, LineUpdate
+from dgp.gui.plotting.plotters import LineGrabPlot, LineUpdate, PqtLineSelectPlot
 
 
 class PlotTab(BaseTab):
@@ -23,7 +23,6 @@ class PlotTab(BaseTab):
                  plot_default=True, **kwargs):
         super().__init__(label, flight, **kwargs)
         self.log = logging.getLogger('PlotTab')
-        self.model = None
         self._ctrl_widget = None
         self._axes_count = axes
         self._setup_ui()
@@ -37,19 +36,27 @@ class PlotTab(BaseTab):
         top_button_hlayout.addWidget(self._select_channels,
                                      alignment=Qt.AlignLeft)
 
-        self._enter_line_selection = QtWidgets.QPushButton("Enter Line "
-                                                           "Selection Mode")
-        top_button_hlayout.addWidget(self._enter_line_selection,
+        self._mode_label = QtWidgets.QLabel('')
+        # top_button_hlayout.addSpacing(20)
+        top_button_hlayout.addStretch(2)
+        top_button_hlayout.addWidget(self._mode_label)
+        top_button_hlayout.addStretch(2)
+        # top_button_hlayout.addSpacing(20)
+        self._toggle_mode = QtWidgets.QPushButton("Toggle Line Selection Mode")
+        self._toggle_mode.setCheckable(True)
+        self._toggle_mode.toggled.connect(self._toggle_selection)
+        top_button_hlayout.addWidget(self._toggle_mode,
                                      alignment=Qt.AlignRight)
         vlayout.addLayout(top_button_hlayout)
 
-        self.plot = LineGrabPlot(self.flight, self._axes_count)
+        # self.plot = LineGrabPlot(self.flight, self._axes_count)
+        self.plot = PqtLineSelectPlot(flight=self.flight, rows=3)
         for line in self.flight.lines:
             self.plot.add_patch(line.start, line.stop, line.uid, line.label)
         self.plot.line_changed.connect(self._on_modified_line)
 
-        vlayout.addWidget(self.plot)
-        vlayout.addWidget(self.plot.get_toolbar(), alignment=Qt.AlignBottom)
+        vlayout.addWidget(self.plot.widget)
+        # vlayout.addWidget(self.plot.get_toolbar(), alignment=Qt.AlignBottom)
         self.setLayout(vlayout)
 
     def _init_model(self, default_state=False):
@@ -61,6 +68,15 @@ class PlotTab(BaseTab):
 
         if default_state:
             self.set_defaults(channels)
+
+    def _toggle_selection(self, state: bool):
+        self.plot.selection_mode = state
+        if state:
+            # self._toggle_mode.setText("Exit Line Selection Mode")
+            self._mode_label.setText("<h2><b>Line Selection Active</b></h2>")
+        else:
+            # self._toggle_mode.setText("Enter Line Selection Mode")
+            self._mode_label.setText("")
 
     def set_defaults(self, channels):
         for name, plot in self.defaults.items():
@@ -108,15 +124,16 @@ class PlotTab(BaseTab):
             line = types.FlightLine(info.start, info.stop, uid=info.uid)
             self.flight.add_line(line)
             self.log.debug("Added line to flight {flt}: start={start}, "
-                           "stop={stop}, label={label}"
+                           "stop={stop}, label={label}, uid={uid}"
                            .format(flt=self.flight.name, start=info.start,
-                                   stop=info.stop, label=info.label))
+                                   stop=info.stop, label=info.label,
+                                   uid=line.uid))
 
     def _on_channel_changed(self, new: int, channel: types.DataChannel):
-        self.plot.remove_series(channel)
+        self.plot.remove_series(channel.series())
         if new != -1:
             try:
-                self.plot.add_series(channel, new)
+                self.plot.add_series(channel.series(), new)
             except:
                 self.log.exception("Error adding series to plot")
         self.model.update()
