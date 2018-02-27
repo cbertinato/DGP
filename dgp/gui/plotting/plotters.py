@@ -189,6 +189,7 @@ class PqtLineSelectPlot(QtCore.QObject):
         for i, plot in enumerate(self.plots):
             lfr = LinearFlightRegion(parent=self)
             plot.addItem(lfr)
+            plot.addItem(lfr.label)
             lfr.setRegion(patch_region)
             lfr.setMovable(self._selecting)
             lfr_group.append(lfr)
@@ -209,7 +210,23 @@ class PqtLineSelectPlot(QtCore.QObject):
                             pd.to_datetime(1), pd.to_datetime(1), None)
         grp = self._selections[grpid]
         for i, plot in enumerate(self.plots):
+            plot.removeItem(grp[i].label)
             plot.removeItem(grp[i])
+            del self._group_map[grp[i]]
+        del self._selections[grpid]
+        self.line_changed.emit(update)
+
+    def set_label(self, item, text):
+        if not isinstance(item, LinearFlightRegion):
+            return
+        grpid = self._group_map[item]
+        group = self._selections[grpid]
+        for lfr in group:  # type: LinearFlightRegion
+            lfr.set_label(text)
+
+        x0, x1 = item.getRegion()
+        update = LineUpdate(self._flight.uid, 'modify', grpid,
+                            pd.to_datetime(x0), pd.to_datetime(x1), text)
         self.line_changed.emit(update)
 
     def update(self, item: LinearRegionItem):
